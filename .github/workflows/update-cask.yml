@@ -1,0 +1,76 @@
+name: Update manor-edge cask
+
+# Keeps Casks/manor-edge.rb on the current production MANOR Edge release.
+# Every hour it reads the public downloads manifest (the same production
+# release mymanor.click/download offers), re-renders the cask and commits only
+# when the result changes: a new version or checksum. No secrets are involved;
+# the repository's own GITHUB_TOKEN makes the commit.
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit the re-rendered cask
+  actions: write    # keep this scheduled workflow enabled (last step)
+
+concurrency:
+  group: update-cask
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The renderer rejects any manifest entry that is not the production,
+      # notarized DMG at releases/app/<version>/ManorEdge.dmg.
+      - name: Render the cask from the production manifest
+        run: |
+          set -euo pipefail
+          curl -fsS --proto '=https' https://downloads.mymanor.click/latest.json -o "$RUNNER_TEMP/latest.json"
+          mkdir -p Casks
+          node .github/scripts/render-cask.mjs --manifest "$RUNNER_TEMP/latest.json" --out Casks/manor-edge.rb
+
+      - name: Commit a new version or checksum
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- Casks/manor-edge.rb)" ]; then
+            echo "manor-edge is current: $(sed -n 's/^  version "\(.*\)"$/\1/p' Casks/manor-edge.rb)"
+            exit 0
+          fi
+          VERSION=$(sed -n 's/^  version "\(.*\)"$/\1/p' Casks/manor-edge.rb)
+          SHA256=$(sed -n 's/^  sha256 "\(.*\)"$/\1/p' Casks/manor-edge.rb)
+          PREVIOUS=$(git show HEAD:Casks/manor-edge.rb 2>/dev/null | sed -n 's/^  version "\(.*\)"$/\1/p' || true)
+          if [ -n "$PREVIOUS" ]; then
+            NEWER=$(printf '%s\n%s\n' "$PREVIOUS" "$VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+            if [ "$NEWER" != "$VERSION" ]; then
+              echo "::error::the manifest offers $VERSION, older than the cask's $PREVIOUS; not moving the tap backwards"
+              exit 1
+            fi
+          fi
+          # The bytes brew will download must match before anyone sees them.
+          curl -fsS --proto '=https' "https://downloads.mymanor.click/releases/app/$VERSION/ManorEdge.dmg" -o "$RUNNER_TEMP/ManorEdge.dmg"
+          echo "$SHA256  $RUNNER_TEMP/ManorEdge.dmg" | sha256sum -c -
+          ruby -c Casks/manor-edge.rb
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Casks/manor-edge.rb
+          git commit -m "manor-edge $VERSION"
+          git push origin HEAD:main
+          echo "::notice::manor-edge $VERSION (was ${PREVIOUS:-none})"
+
+      # GitHub disables scheduled workflows in a public repository after 60
+      # days without activity. Releases can be further apart than that, so
+      # every run re-enables this workflow.
+      - name: Keep the hourly schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/update-cask.yml/enable"
