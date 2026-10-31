@@ -2,8 +2,8 @@
 # Do not edit by hand: the tap's update-cask workflow re-renders it hourly
 # and commits when a new production release appears.
 cask "manor-edge" do
-  version "1.0.3762"
-  sha256 "3612811e5d5f5372742695fc65f2b0e58c909d17d924f13bfab777ac0ab2f601"
+  version "1.0.3824"
+  sha256 "2a5c470058e6cd8b8bf7599f6455ddda69c4e4d63b120d890ba69165d4964185"
 
   url "https://downloads.mymanor.click/releases/app/#{version}/ManorEdge.dmg"
   name "MANOR Edge"
